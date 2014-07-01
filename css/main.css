@@ -69,6 +69,7 @@ html {
 img {
 	padding-left: 2%;
 	margin-top: 10%;
+	border-radius:10px;
 }
 .contact>a>img {
 	margin-top: 1%;
