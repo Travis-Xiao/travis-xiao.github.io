@@ -1,47 +1,160 @@
-.chapter {
-	position: relative;
+html {
+	background: url(/Personal/travis-xiao.github.io/img/background.jpg) center center fixed no-repeat;
+	/*background-repeat: no-repeat fixed;*/
 }
-.image {
-	position: relative;
+
+.banner {
+	text-align: center;
+	width: 110%;
+	height: 48px;
+	position: fixed;
+	margin-left: -1%;
+	margin-right: 1%;
+	margin-top: -1%;
+	background-color: #333333;
+	-webkit-box-shadow: 0px 6px 18px 0px rgba(50, 50, 50, 0.89);
+	-moz-box-shadow:    0px 6px 18px 0px rgba(50, 50, 50, 0.89);
+	box-shadow:         0px 6px 18px 0px rgba(50, 50, 50, 0.89);
+}
+.brand {
+	float: left;
+	margin-top: 1%;
+	margin-left: 10%;
+	margin-right: 2%;
+	height: 41px;
+	font-size: 20px;
+	color: #999999;
+	text-shadow: rgba(0, 0, 0, 0.247059) 0px -1px 0px;;
+	font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+}
+
+.nav>li {
+	margin-top: 2px;
+	margin-left: 15px;
+	float: left;
+	font-size: 16px;
+	color: #ffffff;
+}
+
+.nav>li>a {
+	color: rgba(255, 255, 255, 0.247059);
+	text-decoration: none;
+}
+.active>a {
+	color: #ffffff ! important; 
+}
+.title {
+	color: black;
+	margin-left: 10%;
+	font-size: 25px;
+	font-family: "Microsoft YaHei", STSong;
+}
+
+.blank {
+	height: 5%;
 	width: 100%;
-	height: 100%;
-	margin-left: 0px;
-	margin-top: 0px;
-	padding: 0px;
-	position: 0px;
-	-webkit-filter: blur(8px); /* Chrome, Opera */
-       -moz-filter: blur(10px);
-        -ms-filter: blur(10px);
-            filter: blur(10px);
+}
+
+.content, .sidebar {
+	margin-top: 200px;
+	border:none;
+	border-radius:20px;
+	-moz-border-radius:20px;
+	margin-top: 15px;
+	-webkit-box-shadow: 8px 6px 30px 0px rgba(50, 50, 50, 0.89);
+	-moz-box-shadow:    8px 6px 30px 0px rgba(50, 50, 50, 0.89);
+	box-shadow:         8px 6px 30px 0px rgba(50, 50, 50, 0.89);
+}
+
+img {
+	padding-left: 2%;
+	margin-top: 10%;
+}
+.contact>a>img {
+	margin-top: 1%;
+	max-height: 40%;
+	max-width: 80%;
 }
 .content {
-	position: relative;
-	float: right;
-	width: 100%;
-	text-align: center;
-	vertical-align: middle;
-	/*padding-top: 20%;*/
-	/*margin-left: 50%;*/
-	z-index: 1;
+	float: left;
+	width: 59%;
+	margin-left: 10%;
+	color: #cccccc;
+	background-color: rgba(220,220,220, 0.75);
 }
-.headline {
-	font-size: 75;
-	font-family: "Comic Sans MS", cursive, sans-serif, STKaiti,Microsoft YaHei;
-	color: white;
-	margin-top: 15%;
-	margin-bottom: 2%;
 
-	text-shadow:2px 2px 1px #000;
+.log {
+	margin-left: 5%;
+	margin-top: 2%;
+}
+
+.log > a {
+	font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+	color: #000;
+	text-shadow: ;
+	text-decoration: none;
+}
+div#clearfix {clear:both; height:0;}
+
+.detail {
+	color: black;
+	margin-left: 10%;
+	margin-right: 10%;
+	font-size: 16px;
+}
+.basic-info {
+	font-size: 20px;
+	color: black;
+	font-color: black;
+}
+
+.diary {
+	margin-left: 2%;
+	margin-top: 0%;
+	margin-right: 2%;
+	border-radius:20px;
+	background-color: #eeeeee;
+	-moz-border-radius:20px;
+	-webkit-box-shadow: 8px 6px 15px 0px rgba(50, 50, 50, 0.89);
+	-moz-box-shadow:    8px 6px 15px 0px rgba(50, 50, 50, 0.89);
+	box-shadow:         8px 6px 15px 0px rgba(50, 50, 50, 0.89);
 }
 
 .text {
-	margin-top: 0%;
-	font-size: 20;
-	color: black;
-	font-family: "Palatino Linotype", "Book Antiqua", Palatino,STKaiti, serif, Microsoft YaHei;
-
+	margin-left: 5%;
+	margin-top: 2%;
+	padding-bottom: 1%;
+	color: rgb(150,150,150);
+	min-height: 50px;
 }
 
-a {
+.headline {
+	padding-top: 15px;
+	font-size: 22px;
 	color: black;
+	margin-top: 2%;
+	margin-left: 2%;
+}
+.sidebar {
+	text-align: center;
+	float: right;
+	width: 20%;
+	height: 100%;
+	margin-right: 10%;
+	color: rgba(255,255,255,0.18);
+	background-color: rgba(255,255,255,0.75);
+}
+.footer {
+	/*height: 5%;*/
+	margin-bottom: 0px;
+	width: 100%;
+	background-color: #cccccc;
+	color: black;
+	padding: 10px;
+	margin-top: 1%;
+	margin-left: -1%;
+	margin-right: 1%;
+	margin-bottom: -3%;
+	text-align: center;
+
 }
