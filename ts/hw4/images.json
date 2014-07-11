@@ -1,0 +1,20 @@
+{
+  "images": [
+      {
+        "name":"1.jpg",
+        "path":"./img/1.jpg"
+      },
+      {
+        "name":"2.jpg",
+        "path":"./img/2.jpg"
+      },
+      {
+        "name":"3.jpg",
+        "path":"./img/3.jpg"
+      },
+      {
+        "name":"4.jpg",
+        "path":"./img/4.jpg"
+      }
+    ]
+}
