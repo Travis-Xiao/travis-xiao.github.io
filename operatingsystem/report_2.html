@@ -1,0 +1,512 @@
+<h1 id="xv6进程调度阅读报告">Xv6进程调度阅读报告</h1>
+
+<p>@肖剑楠 20111013223</p>
+
+<p><div class="toc"><div class="toc">
+<ul>
+<li><a href="#xv6进程调度阅读报告">Xv6进程调度阅读报告</a><ul>
+<li><a href="#1-序">1. 序</a></li>
+<li><a href="#2-上下文切换">2. 上下文切换</a><ul>
+<li><a href="#21-defsh">2.1 defs.h</a></li>
+<li><a href="#22-swtchs">2.2 swtch.S</a></li>
+</ul>
+</li>
+<li><a href="#3-进程调度">3. 进程调度</a></li>
+<li><a href="#4-管道">4. 管道</a></li>
+<li><a href="#5-进程调度流程">5. 进程调度流程</a></li>
+<li><a href="#6-pipe实现概述">6. Pipe实现概述</a></li>
+<li><a href="#7-阅读心得">7. 阅读心得</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</div>
+</p>
+
+
+
+<h2 id="1-序">1. 序</h2>
+
+<p>Xv6为了实现CPU多进程化需要解决一系列问题。1. 如何在进程间切换？2. 如何让这一切换变得透明？3. 需要锁机制来避免竞争。4. 内存、资源的自动释放。 <br>
+Xv6通过实现上下文切换（Context Switching），时间中断处理，锁，睡眠与唤醒等机制基本解决了上述问题。主要代码包括swtch.S, defs.h, proc.h, proc.c, mmu.h等文件。 <br>
+下面按模块对上述文件逐一分析。</p>
+
+
+
+<h2 id="2-上下文切换">2. 上下文切换</h2>
+
+
+
+<h3 id="21-defsh">2.1 defs.h</h3>
+
+<p>在一切的一切之前，我们先看一下defs.h的结构体的定义以及函数的声明。 <br>
+该文件中集中声明了一系列函数以及结构体，对于本章节之后需要讨论的部分，需要关注<code>struct context</code>, <code>struct proc</code>等结构体。 <br>
+<code>struct context</code>在proc.h(40-56)中定义。其结构实际上是五个寄存器的值。也就是在上下文切换时，主要做的事情就是保存并更新寄存器值。同时根据惯例，调用者会保存<code>%eax,%ecx,%edx</code>的值。</p>
+
+<pre><code>struct context {
+  uint edi;
+  uint esi;
+  uint ebx;
+  uint ebp;
+  uint eip;
+};
+</code></pre>
+
+<p>顺便将proc和pipe的结构也分析一下。 <br>
+<code>struct proc</code> 在proc.h(60-75)中定义，通过一个结构体记录每个进程的状态。</p>
+
+<pre><code>struct proc {
+  uint sz;                     // 进程的内存大小（以byte计）
+  pde_t* pgdir;                // 进程页路径的线性地址。
+  char *kstack;                // 进程的内核栈底
+  enum procstate state;        // 进程状态
+  volatile int pid;            // 进程ID
+  struct proc *parent;         // 父进程
+  struct trapframe *tf;        // 当前系统调用的中断帧
+  struct context *context;     // 进程运行的入口
+  int killed;                  // 当非0时，表示已结束
+  struct file *ofile[NOFILE];  // 打开的文件列表
+  struct inode *cwd;           // 进程当前路径
+  char name[16];               // 进程名称
+};
+</code></pre>
+
+<p>pipe依赖对结构体spinlock，cpu的定义，见spinlock.h及proc.h(11-24)。 <br>
+spinlock的作用在于当进程请求得到一个正在被占用的锁时，将进程处于循环检查，等待锁被释放的状态。</p>
+
+<pre><code>struct spinlock {
+  uint locked;       // 锁是否处于锁住状态
+
+  // For debugging:
+  char *name;        // 锁名称
+  struct cpu *cpu;   // 占有该锁的CPU信息
+  uint pcs[10];      // 占有该锁的指令栈
+};
+</code></pre>
+
+<p><code>pipe</code>的结构在pipe.h(12-19)中定义，</p>
+
+<pre><code>struct pipe {
+  struct spinlock lock; 
+  char data[PIPESIZE];  // 保存pipe的内容，PIPESIZE为512
+  uint nread;     // 读取的byte长度
+  uint nwrite;    // 写入的byte长度
+  int readopen;   // 是否正在读取
+  int writeopen;  // 是否正在写入
+};
+</code></pre>
+
+
+
+<h3 id="22-swtchs">2.2 swtch.S</h3>
+
+<p>该文件的作用在于使用汇编代码实现了swtch函数，</p>
+
+<pre><code>.globl swtch
+swtch:
+  # 将需要保存的context地址读取到%esp中，新context地址读取到%edx中
+  # 4(%esp)对应的是需要保存的context
+  # 8(%esp)对应的是新的context
+  movl 4(%esp), %eax
+  movl 8(%esp), %edx
+
+  # 将寄存器中过期的数值压栈
+  pushl %ebp
+  pushl %ebx
+  pushl %esi
+  pushl %edi
+
+  # 交换栈
+  movl %esp, (%eax) # 保存需要保存的context地址
+  movl %edx, %esp   # 读取新的context信息
+
+  # 加载新的context信息
+  popl %edi
+  popl %esi
+  popl %ebx
+  popl %ebp
+  ret
+</code></pre>
+
+
+
+<h2 id="3-进程调度">3. 进程调度</h2>
+
+<p>进程调度的主要函数集中在proc.c中，就让我们从这个文件开始说起吧。 <br>
+对于单个CPU来说，scheduler是最主要的函数。当CPU初始化之后，即调用scheduler()，循环从进程队列中选择一个进程执行；当进程结束时，将控制权通过swtch()移交给scheduler。</p>
+
+<pre><code>void
+scheduler(void)
+{
+  struct proc *p;
+
+  for(;;){
+    // 在每次执行一个进程之前，需要调用sti()函数开启CPU的中断
+    sti();
+
+    // 遍历进程表找到一个进程执行
+    acquire(&amp;ptable.lock); // 获取进程表的锁，避免其他CPU更改进程表
+    for(p = ptable.proc; p &lt; &amp;ptable.proc[NPROC]; p++){
+      // 如果进程的状态为不可运行，则略过
+      if(p-&gt;state != RUNNABLE)
+        continue;
+
+      // 切换到选择的进程，释放进程表锁，当进程结束时，再重新获取
+      proc = p;
+      switchuvm(p);
+      p-&gt;state = RUNNING;
+      swtch(&amp;cpu-&gt;scheduler, proc-&gt;context);
+      switchkvm();
+
+      // Process is done running for now.
+      // It should have changed its p-&gt;state before coming back.
+      proc = 0;
+    }
+    release(&amp;ptable.lock);
+  }
+}
+</code></pre>
+
+<p>在每次Loop之后，都要及时释放进程表锁，这样可以避免当进程表中暂时没有可以运行的程序时，进程表会一直被该CPU锁死，其他CPU便不能访问。其中一种情况是，当进程等待IO时，不是RUNNABLE的，而CPU处于idle状态，一直在占有进程表锁，IO信号无法到达。</p>
+
+<p>sched()切换至CPU context，在切换context之前，进行一系列判断，以避免出现冲突。</p>
+
+<pre><code>void
+sched(void)
+{
+  int intena;
+
+  // 是否获取到了进程表锁
+  if(!holding(&amp;ptable.lock))
+    panic("sched ptable.lock");
+  // 是否执行过pushcli
+  if(cpu-&gt;ncli != 1)
+    panic("sched locks");
+  // 执行的程序应该处于结束或者睡眠状态
+  if(proc-&gt;state == RUNNING)
+    panic("sched running");
+  // 判断中断是否可以关闭
+  if(readeflags()&amp;FL_IF)
+    panic("sched interruptible");
+
+  intena = cpu-&gt;intena;
+  // 上下文切换至scheduler
+  swtch(&amp;proc-&gt;context, cpu-&gt;scheduler);
+  cpu-&gt;intena = intena;
+}
+</code></pre>
+
+<p>yield()函数将CPU主动让出一个调度周期(scheduling round)，这个函数在xv6的当前版本中，仅在trap()中调用，见trap.c(100)。实际应用在于当一个进程正在使用CPU，同时中断处于打开状态，需要查看nlock。</p>
+
+<pre><code>void
+yield(void)
+{
+  // 获取进程表锁
+  acquire(&amp;ptable.lock);
+  // 将进程状态设为可运行，以便下次遍历时可以被唤醒
+  proc-&gt;state = RUNNABLE;
+  // 执行sched函数，准备将CPU切换到scheduler context
+  sched();
+  // 释放进程表锁
+  release(&amp;ptable.lock);
+}
+</code></pre>
+
+<p>sleep和wakeup是两个互补的函数，共同作用实现改变进程执行顺序， <br>
+sleep函数有两个参数 <code>void *chan</code>和<code>struct spinlock *lk</code>。</p>
+
+<pre><code>void
+sleep(void *chan, struct spinlock *lk)
+{
+  if(proc == 0)
+    panic("sleep");
+
+  if(lk == 0)
+    panic("sleep without lk");
+
+  // 释放锁lk
+  if(lk != &amp;ptable.lock){  //DOC: sleeplock0
+    acquire(&amp;ptable.lock);  //DOC: sleeplock1
+    release(lk);
+  }
+
+  // 更改状态为SLEEPING，并切换至CPU context
+  proc-&gt;chan = chan;
+  proc-&gt;state = SLEEPING;
+  sched();
+
+  // Tidy up.
+  proc-&gt;chan = 0;
+
+  // 重新获得刚刚释放的lk锁
+  if(lk != &amp;ptable.lock){  //DOC: sleeplock2
+    release(&amp;ptable.lock);
+    acquire(lk);
+  }
+}
+</code></pre>
+
+<p>值得注意的是，使进程进入睡眠需要两个锁，lk和ptable.lock，由于之前已经得到了ptable.lock，所以wakeup在此期间不会执行，直至进程完全进入睡眠状态，所以lk这个锁可以释放。</p>
+
+<p>wakeup函数的主体部分位于wakeup1函数中。</p>
+
+<pre><code>void
+wakeup(void *chan)
+{
+  // 先获取ptable.lock，确保sleep不会执行，避免出现missed wakeup
+  acquire(&amp;ptable.lock);
+  wakeup1(chan);
+  // 唤醒结束，释放ptable.lock
+  release(&amp;ptable.lock);
+}
+</code></pre>
+
+<p>wakeup1函数完成了唤醒的主要工作。wakeup1之所以与wakeup作为两个独立的函数，是因为除了被wakeup调用之外，还在exit中调用，后面会详细讲到。</p>
+
+<pre><code>static void
+wakeup1(void *chan)
+{
+  struct proc *p;
+  // 遍历进程表，当发现有符合运行条件的程序时，将其标记为RUNNABLE
+  for(p = ptable.proc; p &lt; &amp;ptable.proc[NPROC]; p++)
+    if(p-&gt;state == SLEEPING &amp;&amp; p-&gt;chan == chan)
+      p-&gt;state = RUNNABLE;
+}
+</code></pre>
+
+<p>wait函数用于父进程等待子进程结束，如果没有子进程，则返回-1，否则返回已经结束的子进程的pid。</p>
+
+<pre><code>int
+wait(void)
+{
+  struct proc *p;
+  int havekids, pid;
+  // 获取进程表锁
+  acquire(&amp;ptable.lock);
+  for(;;){
+    // 遍历查找是否有处于zombie状态的子进程
+    havekids = 0;
+    for(p = ptable.proc; p &lt; &amp;ptable.proc[NPROC]; p++){
+      if(p-&gt;parent != proc)
+        continue;
+      // 如果发现有子进程
+      havekids = 1;
+      // 如果进程状态为zombie，则将其释放并返回该子进程的pid
+      if(p-&gt;state == ZOMBIE){
+        // Found one.
+        pid = p-&gt;pid;
+        kfree(p-&gt;kstack);
+        p-&gt;kstack = 0;
+        freevm(p-&gt;pgdir);
+        p-&gt;state = UNUSED;
+        p-&gt;pid = 0;
+        p-&gt;parent = 0;
+        p-&gt;name[0] = 0;
+        p-&gt;killed = 0;
+        release(&amp;ptable.lock);
+        return pid;
+      }
+    }
+
+    // 如果没有子进程则直接返回
+    if(!havekids || proc-&gt;killed){
+      release(&amp;ptable.lock);
+      return -1;
+    }
+
+    // 如果有子进程处于睡眠状态，则将父进程置于睡眠状态
+    sleep(proc, &amp;ptable.lock);  //DOC: wait-sleep
+  }
+}
+</code></pre>
+
+<p>其中，当仍有子进程睡眠时，并没有释放ptable.lock，是因为释放操作放在了sleep函数中，且满足了sleep函数的调用条件，事先获得ptable.lock。</p>
+
+<p>exit()完成了进程结束时的资源释放以及子进程处理等工作。其中只进行了一次acquire操作，这样可以使进程结束的操作原子化；同时可能存在多次的wakeup1操作，这样减少了很多时间。结束后，没有主动调用release，是因为sched进行context switching的时候需要获得ptable.lock，释放在scheduler中进行。</p>
+
+<pre><code>void
+exit(void)
+{
+  struct proc *p;
+  int fd;
+
+  if(proc == initproc)
+    panic("init exiting");
+
+  // 关闭之前打开的文件
+  for(fd = 0; fd &lt; NOFILE; fd++){
+    if(proc-&gt;ofile[fd]){
+      fileclose(proc-&gt;ofile[fd]);
+      proc-&gt;ofile[fd] = 0;
+    }
+  }
+  iput(proc-&gt;cwd);
+  proc-&gt;cwd = 0;
+
+  acquire(&amp;ptable.lock);
+
+  // 唤醒父进程，一边父进程将处于zombie状态的该进程回收
+  wakeup1(proc-&gt;parent);
+
+  // 将子进程移交给initproc
+  for(p = ptable.proc; p &lt; &amp;ptable.proc[NPROC]; p++){
+    if(p-&gt;parent == proc){
+      p-&gt;parent = initproc;
+      // 如果子进程处于zombie状态，则唤醒其新父亲initproc来料理后事
+      if(p-&gt;state == ZOMBIE)
+        wakeup1(initproc);
+    }
+  }
+
+  // 移交给scheduler，等待父进程处理
+  proc-&gt;state = ZOMBIE;
+  sched();
+  panic("zombie exit");
+}
+</code></pre>
+
+<h2 id="4-管道">4. 管道</h2>
+
+<p>xv6中实现管道的结构体pipe已经在前面关于defs.h的分析中提及。此处直接分析pipe.c。</p>
+
+<p>pipealloc实现了pipe的创建，并将pipe关联到两个文件上<code>f0, f1</code>。如果创建成功，返回0；否则返回-1。</p>
+
+<pre><code>int
+pipealloc(struct file **f0, struct file **f1)
+{
+  struct pipe *p;
+
+  p = 0;
+  *f0 = *f1 = 0;
+  // 如果f0,f1不存在则返回-1
+  if((*f0 = filealloc()) == 0 || (*f1 = filealloc()) == 0)
+    goto bad;
+  if((p = (struct pipe*)kalloc()) == 0)
+    goto bad;
+  // 
+  // 初始化pipe
+  p-&gt;readopen = 1;
+  p-&gt;writeopen = 1;
+  p-&gt;nwrite = 0;
+  p-&gt;nread = 0;
+  initlock(&amp;p-&gt;lock, "pipe");
+  (*f0)-&gt;type = FD_PIPE;
+  (*f0)-&gt;readable = 1;
+  (*f0)-&gt;writable = 0;
+  (*f0)-&gt;pipe = p;
+  (*f1)-&gt;type = FD_PIPE;
+  (*f1)-&gt;readable = 0;
+  (*f1)-&gt;writable = 1;
+  (*f1)-&gt;pipe = p;
+  return 0;
+
+ // 如果创建失败，则将进度回滚，释放占用的内存、解除对文件的占有
+ bad:
+  if(p)
+    kfree((char*)p);
+  if(*f0)
+    fileclose(*f0);
+  if(*f1)
+    fileclose(*f1);
+  return -1;
+}
+</code></pre>
+
+<p>pipeclose实现了关闭pipe的处理。</p>
+
+<pre><code>void
+pipeclose(struct pipe *p, int writable)
+{
+  // 获取管道锁，避免在关闭的同时进行读写操作
+  acquire(&amp;p-&gt;lock);
+  // 判断是否有未被读取的数据
+  if(writable){
+    // 如果存在，则唤醒pipe的读进程；否则唤醒写进程
+    p-&gt;writeopen = 0;
+    wakeup(&amp;p-&gt;nread);
+  } else {
+    p-&gt;readopen = 0;
+    wakeup(&amp;p-&gt;nwrite);
+  }
+  // 当pipe的读写都已结束时，释放资源；否则释放pipe锁
+  if(p-&gt;readopen == 0 &amp;&amp; p-&gt;writeopen == 0) {
+    release(&amp;p-&gt;lock);
+    kfree((char*)p);
+  } else
+    release(&amp;p-&gt;lock);
+}
+</code></pre>
+
+<p>pipewrite实现了管道的写操作。</p>
+
+<pre><code>int
+pipewrite(struct pipe *p, char *addr, int n)
+{
+  int i;
+
+  acquire(&amp;p-&gt;lock);
+  // 逐字节写入
+  for(i = 0; i &lt; n; i++){
+    // 如果pipe已经写满
+    while(p-&gt;nwrite == p-&gt;nread + PIPESIZE) {  //DOC: pipewrite-full
+      // 唤醒读进程，写进程进入睡眠，并返回-1
+      if(p-&gt;readopen == 0 || proc-&gt;killed){
+        release(&amp;p-&gt;lock);
+        return -1;
+      }
+      wakeup(&amp;p-&gt;nread);
+      sleep(&amp;p-&gt;nwrite, &amp;p-&gt;lock);  //DOC: pipewrite-sleep
+    }
+    p-&gt;data[p-&gt;nwrite++ % PIPESIZE] = addr[i];
+  }
+  // 写完之后唤醒读进程
+  wakeup(&amp;p-&gt;nread);  //DOC: pipewrite-wakeup1
+  release(&amp;p-&gt;lock);
+  return n;
+}
+</code></pre>
+
+<p>piperead实现了pipe的读操作。</p>
+
+<pre><code>int
+piperead(struct pipe *p, char *addr, int n)
+{
+  int i;
+
+  acquire(&amp;p-&gt;lock);
+  // 如果pipe已经读空，并且正在写入，则进入睡眠状态
+  while(p-&gt;nread == p-&gt;nwrite &amp;&amp; p-&gt;writeopen){  //DOC: pipe-empty
+    if(proc-&gt;killed){
+      release(&amp;p-&gt;lock);
+      return -1;
+    }
+    sleep(&amp;p-&gt;nread, &amp;p-&gt;lock); //DOC: piperead-sleep
+  }
+  for(i = 0; i &lt; n; i++){  //DOC: piperead-copy
+    if(p-&gt;nread == p-&gt;nwrite)
+      break;
+    addr[i] = p-&gt;data[p-&gt;nread++ % PIPESIZE];
+  }
+  // 读取完毕，唤醒写进程
+  wakeup(&amp;p-&gt;nwrite);  //DOC: piperead-wakeup
+  release(&amp;p-&gt;lock);
+  // 返回读取的字节长度
+  return i;
+}
+</code></pre>
+
+<h2 id="5-进程调度流程">5. 进程调度流程</h2>
+
+<p>进程切换：当CPU启动之后，执行scheduler函数，无限循环。在每个周期里，从进程表中找到一个RUNNABLE的进程，切换为进程的上下文，此时开始执行函数。当函数运行结束时，调用return函数，此时切换为CPU的上下文，开始下一循环。 <br>
+进程唤醒与睡眠：如果一个程序需要等待IO，则CPU会将其设置为睡眠状态，此时不能被执行。当IO信号到达时，执行的进程会将IO信号对应的进程设置为RUNNABLE，即唤醒。下一个scheduler周期的时候，该进程就可能会被执行，处理IO信号。 <br>
+进程表锁：对于多处理器架构而言，需要用到进程表的时候都需要事先获得表的锁，当结束之后再释放，这样保证了对进程表操作的原子化，可以避免多处理器的竞争问题。</p>
+
+<h2 id="6-pipe实现概述">6. Pipe实现概述</h2>
+
+<p>Pipe的主要部分实际上是一小段规定长度的连续数据存储，读写操作将其视为无限循环长度的内存块。 <br>
+初始化时，将给定的文件输入、输出流与该结构体关联；关闭时，释放内存，解除文件占用。 <br>
+读写操作时，分别需要判断是否超出读写的范围，避免覆盖未读数据或者读取已读数据；如果写操作未执行完，则需通过睡眠唤醒的方式来完成大段数据的读取。</p>
+
+<h2 id="7-阅读心得">7. 阅读心得</h2>
+
+<p>由于这部分的代码主要由C代码实现，因为相对来说比第一次的阅读任务简单一些。有两个难点，一需要了解依赖的各结构体信息，并通过实际看代码认清每个属性的作用；二需要将多个函数结合着看，才能理解进程表锁的管理机制。xv6的实现机制并不复杂，主观脑洞大开结合着sched.pdf，就比较容易理解。</p>
